@@ -7,127 +7,120 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const API_URL =
-  process.env.MARKET_API_URL || "https://api.realmarketapi.com";
+const API_BASE = "https://api.realmarketapi.com";
 const API_KEY = process.env.MARKET_API_KEY;
 
-// -------------------------
+
+// ===============================
 // EMA
-// -------------------------
-function calculateEMA(values, period) {
+// ===============================
+function ema(values, period) {
   if (values.length < period) return null;
 
-  const multiplier = 2 / (period + 1);
-  let ema = values[0];
+  const k = 2 / (period + 1);
+  let value = values[0];
 
   for (let i = 1; i < values.length; i++) {
-    ema =
-      (values[i] - ema) * multiplier + ema;
+    value = values[i] * k + value * (1 - k);
   }
 
-  return ema;
+  return value;
 }
 
-// -------------------------
+
+// ===============================
 // RSI
-// -------------------------
-function calculateRSI(closes, period = 14) {
-  if (closes.length <= period) return null;
+// ===============================
+function rsi(values, period = 14) {
+  if (values.length <= period) return null;
 
-  let gains = 0;
-  let losses = 0;
+  let gain = 0;
+  let loss = 0;
 
-  for (
-    let i = closes.length - period;
-    i < closes.length;
-    i++
-  ) {
-    const change =
-      closes[i] - closes[i - 1];
+  for (let i = values.length - period; i < values.length; i++) {
+    const change = values[i] - values[i - 1];
 
     if (change > 0) {
-      gains += change;
+      gain += change;
     } else {
-      losses += Math.abs(change);
+      loss += Math.abs(change);
     }
   }
 
-  if (losses === 0) return 100;
+  if (loss === 0) return 100;
 
-  const rs = gains / losses;
+  const rs = gain / loss;
 
   return 100 - 100 / (1 + rs);
 }
 
-// -------------------------
-// M1 → M2 candles
-// -------------------------
-function makeTwoMinuteCandles(candles) {
-  const result = [];
+
+// ===============================
+// RealMarketAPI candle format
+// ===============================
+function normalize(c) {
+  return {
+    time: c.OpenTime,
+    open: Number(c.OpenPrice),
+    high: Number(c.HighPrice),
+    low: Number(c.LowPrice),
+    close: Number(c.ClosePrice),
+    volume: Number(c.Volume || 0)
+  };
+}
+
+
+// ===============================
+// Create 2-minute candles
+// ===============================
+function createTwoMinuteCandles(candles) {
 
   const sorted = [...candles].sort(
     (a, b) =>
-      new Date(
-        a.openTime || a.time || a.timestamp
-      ).getTime() -
-      new Date(
-        b.openTime || b.time || b.timestamp
-      ).getTime()
+      new Date(a.time) - new Date(b.time)
   );
 
-  for (let i = 0; i < sorted.length - 1; i += 2) {
-    const c1 = sorted[i];
-    const c2 = sorted[i + 1];
+  const result = [];
 
-    if (!c1 || !c2) continue;
+  for (let i = 0; i + 1 < sorted.length; i += 2) {
+
+    const a = sorted[i];
+    const b = sorted[i + 1];
 
     result.push({
-      time:
-        c1.openTime ||
-        c1.time ||
-        c1.timestamp,
-
-      open: Number(c1.open),
-
-      high: Math.max(
-        Number(c1.high),
-        Number(c2.high)
-      ),
-
-      low: Math.min(
-        Number(c1.low),
-        Number(c2.low)
-      ),
-
-      close: Number(c2.close)
+      time: a.time,
+      open: a.open,
+      high: Math.max(a.high, b.high),
+      low: Math.min(a.low, b.low),
+      close: b.close,
+      volume: a.volume + b.volume
     });
   }
 
   return result;
 }
 
-// -------------------------
-// Signal Analysis
-// -------------------------
-function analyzeMarket(candles) {
-  if (
-  if (!Array.isArray(candles) || candles.length < 50) {
-   if (candles.length < 50) {
-  ) {
+
+// ===============================
+// Signal analysis
+// ===============================
+function analyze(candles) {
+
+  if (candles.length < 50) {
     throw new Error(
       "Not enough candles for analysis"
     );
   }
 
   const closes = candles.map(
-    (c) => Number(c.close)
+    c => c.close
   );
 
-  const ema9 = calculateEMA(closes, 9);
-  const ema21 = calculateEMA(closes, 21);
-  const ema50 = calculateEMA(closes, 50);
+  const ema9 = ema(closes, 9);
+  const ema21 = ema(closes, 21);
+  const ema50 = ema(closes, 50);
 
-  const rsi = calculateRSI(closes, 14);
+  const rsiValue = rsi(closes, 14);
 
   const last =
     candles[candles.length - 1];
@@ -135,75 +128,78 @@ function analyzeMarket(candles) {
   const previous =
     candles[candles.length - 2];
 
-  let buyScore = 0;
-  let sellScore = 0;
+  let buy = 0;
+  let sell = 0;
+
 
   // Trend
   if (
     ema9 > ema21 &&
     ema21 > ema50
   ) {
-    buyScore++;
+    buy++;
   }
 
   if (
     ema9 < ema21 &&
     ema21 < ema50
   ) {
-    sellScore++;
+    sell++;
   }
+
 
   // RSI
-  if (rsi >= 52 && rsi <= 68) {
-    buyScore++;
+  if (
+    rsiValue >= 52 &&
+    rsiValue <= 68
+  ) {
+    buy++;
   }
 
-  if (rsi >= 32 && rsi <= 48) {
-    sellScore++;
+  if (
+    rsiValue >= 32 &&
+    rsiValue <= 48
+  ) {
+    sell++;
   }
+
 
   // Current candle
   if (last.close > last.open) {
-    buyScore++;
+    buy++;
   }
 
   if (last.close < last.open) {
-    sellScore++;
+    sell++;
   }
+
 
   // Previous candle
   if (previous.close > previous.open) {
-    buyScore++;
+    buy++;
   }
 
   if (previous.close < previous.open) {
-    sellScore++;
+    sell++;
   }
+
 
   let signal = "WAIT";
 
   if (
-    buyScore >= 3 &&
-    buyScore > sellScore
+    buy >= 3 &&
+    buy > sell
   ) {
     signal = "BUY";
   }
 
   if (
-    sellScore >= 3 &&
-    sellScore > buyScore
+    sell >= 3 &&
+    sell > buy
   ) {
     signal = "SELL";
   }
 
-  const strength = Math.round(
-    (Math.max(
-      buyScore,
-      sellScore
-    ) /
-      4) *
-      100
-  );
 
   let trend = "SIDEWAYS";
 
@@ -212,12 +208,20 @@ function analyzeMarket(candles) {
     ema21 > ema50
   ) {
     trend = "UPTREND";
-  } else if (
+  }
+
+  if (
     ema9 < ema21 &&
     ema21 < ema50
   ) {
     trend = "DOWNTREND";
   }
+
+
+  const strength = Math.round(
+    Math.max(buy, sell) / 4 * 100
+  );
+
 
   return {
     timeframe: "2 minutes",
@@ -225,67 +229,94 @@ function analyzeMarket(candles) {
     strength,
     trend,
     price: last.close,
-    rsi: Number(rsi.toFixed(2)),
+    rsi: Number(rsiValue.toFixed(2)),
     ema9: Number(ema9.toFixed(6)),
     ema21: Number(ema21.toFixed(6)),
     ema50: Number(ema50.toFixed(6)),
-    buyScore,
-    sellScore,
+    buyScore: buy,
+    sellScore: sell,
     candleTime: last.time
   };
 }
 
-// -------------------------
-// Health Check
-// -------------------------
+
+// ===============================
+// Home
+// ===============================
 app.get("/", (req, res) => {
+
   res.json({
     status: "online",
-    message:
-      "Live 2-Minute Signal Backend Running",
-    marketAPI: "RealMarketAPI",
+    message: "Live 2-Minute Signal Backend Running",
     timeframe: "2 minutes"
   });
+
 });
 
-// -------------------------
-// Live Signal API
-// -------------------------
+
+// ===============================
+// SIGNAL API
+// ===============================
 app.get("/api/signal", async (req, res) => {
+
   try {
-    const symbol = (
-      req.query.symbol || "EURUSD"
-    )
-      .replace("/", "")
-      .toUpperCase();
+
+    const symbol =
+      (req.query.symbol || "EUR/USD")
+        .replace("/", "")
+        .toUpperCase();
+
 
     if (!API_KEY) {
+
       return res.status(500).json({
         market: "ERROR",
-        error:
-          "MARKET_API_KEY is not configured in Render"
+        error: "MARKET_API_KEY is missing in Render"
       });
+
     }
 
-    const url = new URL(
-      "/api/v1/candle",
-      API_URL
-    );
 
-    // IMPORTANT: Capital letters
+    // Get last 100 M1 candles
+    const end =
+      new Date();
+
+    const start =
+      new Date(
+        end.getTime() -
+        3 * 60 * 60 * 1000
+      );
+
+
+    const url =
+      new URL(
+        "/api/v1/history",
+        API_BASE
+      );
+
     url.searchParams.set(
-      "ApiKey",
+      "apiKey",
       API_KEY
     );
 
     url.searchParams.set(
-      "SymbolCode",
+      "symbolCode",
       symbol
     );
 
     url.searchParams.set(
-      "TimeFrame",
-      "M1"
+      "startTime",
+      start.toISOString()
+    );
+
+    url.searchParams.set(
+      "endTime",
+      end.toISOString()
+    );
+
+    url.searchParams.set(
+      "pageNumber",
+      "1"
     );
 
     url.searchParams.set(
@@ -293,130 +324,151 @@ app.get("/api/signal", async (req, res) => {
       "200"
     );
 
-    console.log(
-      "Requesting market data for:",
-      symbol
-    );
 
-    const response = await fetch(
-      url.toString()
-    );
-
-    const responseText =
-      await response.text();
-
-    if (!response.ok) {
-      console.error(
-        "RealMarketAPI error:",
-        response.status,
-        responseText
+    const response =
+      await fetch(
+        url.toString()
       );
 
-      return res.status(500).json({
+
+    const text =
+      await response.text();
+
+
+    if (!response.ok) {
+
+      return res.status(
+        response.status
+      ).json({
+
         market: "ERROR",
+
         error:
           "RealMarketAPI HTTP " +
           response.status,
-        details: responseText
+
+        details: text.slice(0, 500)
+
       });
+
     }
 
-    let json;
 
-    try {
-      json = JSON.parse(responseText);
-    } catch (e) {
-      return res.status(500).json({
-        market: "ERROR",
-        error:
-          "RealMarketAPI returned invalid JSON",
-        details: responseText
-      });
-    }
+    const data =
+      JSON.parse(text);
 
-    console.log(
-      "RealMarketAPI response received"
-    );
 
-    const rawCandles =
-      json.data ||
-      json.candles ||
-      json.values ||
-      json.results ||
+    // History response
+    const items =
+      data.items ||
+      data.Items ||
       [];
 
-    if (!Array.isArray(rawCandles)) {
+
+    if (!Array.isArray(items)) {
+
       return res.status(500).json({
+
         market: "ERROR",
+
         error:
-          "Candle data not found in API response",
-        receivedKeys:
-          Object.keys(json)
+          "RealMarketAPI history format not recognized"
+
       });
+
     }
 
-    const candles =
-      makeTwoMinuteCandles(
-        rawCandles
+
+    const oneMinute =
+      items
+        .map(normalize)
+        .filter(
+          c =>
+            c.time &&
+            Number.isFinite(c.open) &&
+            Number.isFinite(c.high) &&
+            Number.isFinite(c.low) &&
+            Number.isFinite(c.close)
+        );
+
+
+    const twoMinute =
+      createTwoMinuteCandles(
+        oneMinute
       );
 
-    if (candles.length < 50) {
+
+    if (twoMinute.length < 50) {
+
       return res.status(500).json({
+
         market: "ERROR",
+
         error:
           "Not enough candles for 2-minute analysis",
+
         oneMinuteCandles:
-          rawCandles.length,
+          oneMinute.length,
+
         twoMinuteCandles:
-          candles.length
+          twoMinute.length
+
       });
+
     }
 
-    const result =
-      analyzeMarket(candles);
 
-    res.json({
+    const result =
+      analyze(twoMinute);
+
+
+    return res.json({
+
       market: "LIVE",
-      provider: "RealMarketAPI",
-      symbol,
+
+      source: "RealMarketAPI",
+
+      symbol: symbol,
+
       ...result
+
     });
 
+
   } catch (error) {
+
     console.error(
-      "Signal error:",
       error
     );
 
-    res.status(500).json({
+    return res.status(500).json({
+
       market: "ERROR",
+
       error: error.message
+
     });
+
   }
+
 });
 
-// -------------------------
-// Start Server
-// -------------------------
+
+// ===============================
+// START
+// ===============================
 app.listen(
   PORT,
   "0.0.0.0",
   () => {
+
     console.log(
-      "================================="
+      "Live 2-Minute Signal Backend Running"
     );
+
     console.log(
-      "Live 2-Minute Signal Backend"
+      "Port: " + PORT
     );
-    console.log(
-      "RealMarketAPI Connected"
-    );
-    console.log(
-      "Server running on port " +
-        PORT
-    );
-    console.log(
-      "================================="
-    );
+
   }
 );
