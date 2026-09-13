@@ -112,7 +112,7 @@ function makeTwoMinuteCandles(candles) {
 function analyzeMarket(candles) {
   if (
     !Array.isArray(candles) ||
-    candles.length < 60
+   if (candles.length < 50) {
   ) {
     throw new Error(
       "Not enough candles for analysis"
