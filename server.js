@@ -360,7 +360,7 @@ app.get("/api/signal", async (req, res) => {
         rawCandles
       );
 
-    if (candles.length < 60) {
+    if (candles.length < 50) {
       return res.status(500).json({
         market: "ERROR",
         error:
