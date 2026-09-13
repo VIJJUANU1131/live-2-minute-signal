@@ -111,7 +111,7 @@ function makeTwoMinuteCandles(candles) {
 // -------------------------
 function analyzeMarket(candles) {
   if (
-    !Array.isArray(candles) ||
+  if (!Array.isArray(candles) || candles.length < 50) {
    if (candles.length < 50) {
   ) {
     throw new Error(
